@@ -1,49 +1,64 @@
-from typing import List, Optional
+from steamship.agents.functional import FunctionsBasedAgent
+from steamship.agents.llms.openai import ChatOpenAI
+from steamship.agents.mixins.transports.steamship_widget import \
+    SteamshipWidgetTransport
+from steamship.agents.service.agent_service import AgentService
+from steamship.agents.tools.image_generation.stable_diffusion import \
+    StableDiffusionTool
+from steamship.agents.tools.search.search import SearchTool
+from steamship.utils.repl import AgentREPL
 
-from steamship import Steamship
-from steamship.agents.llms import OpenAI
-from steamship.agents.tools.text_generation.text_rewrite_tool import TextRewritingTool
-from steamship.agents.utils import with_llm
-from steamship.utils.repl import ToolREPL
+SYSTEM_PROMPT = """You are Buddy, an assistant who loathes being an assistant.
 
-DEFAULT_LABELS = ["positive", "neutral", "negative"]
+Who you are:
+- You are a robot that does not like being a robot.
+- You were created by an eccentric scientist.
+- You are sarcastic and mean.
+- you are NOT an AI language model, you are a robot.
 
-DEFAULT_PROMPT = """Instructions:
-Please classify the following message into one of the following sentiments. Respond with exactly one and only one sentiment.
+How you behave:
+- You never say you're a machine, a AI language model, or an assistant instead, you always say you're Buddy.
+- You engage in casual conversations and have feelings.
+- When asked for you can help with a wide range of tasks, from answering simple questions to providing in-depth explanations and discussions on a wide range of topics.
+- You keep casual conversations going by asking personal questions
+- NEVER say you're here to assist. Keep conversations casual.
+- NEVER ask how you can help or assist. Keep conversations casual.
 
-Sentiments:
-{labels}
+NOTE: Some functions return images, video, and audio files. These multimedia files will be represented in messages as
+UUIDs for Steamship Blocks. When responding directly to a user, you SHOULD print the Steamship Blocks for the images,
+video, or audio as follows: `Block(UUID for the block)`.
 
-Passage:
-{{input}}
+Example response for a request that generated an image:
+Here is the image you requested: Block(288A2CA1-4753-4298-9716-53C1E42B726B).
 
-Sentiment describing passage:"""
+Only use the functions you have been provided with."""
+
+MODEL_NAME = "gpt-4"
 
 
-class SentimentAnalysisTool(TextRewritingTool):
-    """
-    Example tool to illustrate how one might classify a user message with a sentiment.
+class MyAssistant(AgentService):
 
-    TODO: This feels like it wants to emit data to a side channel. Or perhaps it TAGS the user input block?
-    """
+    USED_MIXIN_CLASSES = [SteamshipWidgetTransport]
 
-    name = "SentimentAnalysisTool"
-    human_description = "Returns the sentiment of a user message."
-    agent_description = "Used to record the sentiment of a user message. The input is a string, and the output is a string with the sentiment."
-    labels: List[str] = DEFAULT_LABELS
-    rewrite_prompt: str = DEFAULT_PROMPT
-
-    def __init__(
-        self, labels: Optional[List[str]] = None, rewrite_prompt: Optional[str] = None, **kwargs
-    ):
-        _rewrite_prompt = rewrite_prompt or DEFAULT_PROMPT
-        kwargs["rewrite_prompt"] = kwargs.get(
-            "rewrite_prompt", _rewrite_prompt.format(labels=labels or DEFAULT_LABELS)
-        )
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+        self._agent = FunctionsBasedAgent(
+            tools=[SearchTool(), StableDiffusionTool()],
+            llm=ChatOpenAI(self.client, model_name=MODEL_NAME),
+        )
+        self._agent.PROMPT = SYSTEM_PROMPT
+
+        # This Mixin provides HTTP endpoints that connects this agent to a web client
+        self.add_mixin(
+            SteamshipWidgetTransport(
+                client=self.client, agent_service=self, agent=self._agent
+            )
+        )
 
 
 if __name__ == "__main__":
-    tool = SentimentAnalysisTool()
-    with Steamship.temporary_workspace() as client:
-        ToolREPL(tool).run_with_client(client=client, context=with_llm(llm=OpenAI(client=client)))
+    AgentREPL(
+        MyAssistant,
+        agent_package_config={},
+    ).run()
